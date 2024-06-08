@@ -1,10 +1,17 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of K9s
+
 package view
 
 import (
 	"context"
 	"fmt"
 	"image"
-	"strings"
+
+	"github.com/derailed/tcell/v2"
+	"github.com/derailed/tview"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 
 	"github.com/derailed/k9s/internal"
 	"github.com/derailed/k9s/internal/client"
@@ -14,8 +21,6 @@ import (
 	"github.com/derailed/k9s/internal/render"
 	"github.com/derailed/k9s/internal/tchart"
 	"github.com/derailed/k9s/internal/ui"
-	"github.com/derailed/tview"
-	"github.com/gdamore/tcell/v2"
 )
 
 // Graphable represents a graphic component.
@@ -59,7 +64,7 @@ type Pulse struct {
 	gvr      client.GVR
 	model    *model.Pulse
 	cancelFn context.CancelFunc
-	actions  ui.KeyActions
+	actions  *ui.KeyActions
 	charts   []Graphable
 }
 
@@ -68,9 +73,12 @@ func NewPulse(gvr client.GVR) ResourceViewer {
 	return &Pulse{
 		Grid:    tview.NewGrid(),
 		model:   model.NewPulse(gvr.String()),
-		actions: make(ui.KeyActions),
+		actions: ui.NewKeyActions(),
 	}
 }
+
+func (p *Pulse) SetFilter(string)                 {}
+func (p *Pulse) SetLabelFilter(map[string]string) {}
 
 // Init initializes the view.
 func (p *Pulse) Init(ctx context.Context) error {
@@ -162,7 +170,7 @@ func (p *Pulse) PulseChanged(c *health.Check) {
 	case "cpu":
 		perc := client.ToPercentage(c.Tally(health.S1), c.Tally(health.S2))
 		v.SetLegend(fmt.Sprintf(cpuFmt,
-			strings.Title(gvr.R()),
+			cases.Title(language.Und, cases.NoLower).String(gvr.R()),
 			p.app.Config.K9s.Thresholds.SeverityColor("cpu", perc),
 			render.PrintPerc(perc),
 			nn[0],
@@ -173,7 +181,7 @@ func (p *Pulse) PulseChanged(c *health.Check) {
 	case "mem":
 		perc := client.ToPercentage(c.Tally(health.S1), c.Tally(health.S2))
 		v.SetLegend(fmt.Sprintf(memFmt,
-			strings.Title(gvr.R()),
+			cases.Title(language.Und, cases.NoLower).String(gvr.R()),
 			p.app.Config.K9s.Thresholds.SeverityColor("memory", perc),
 			render.PrintPerc(perc),
 			nn[0],
@@ -183,7 +191,7 @@ func (p *Pulse) PulseChanged(c *health.Check) {
 		))
 	default:
 		v.SetLegend(fmt.Sprintf(genFmat,
-			strings.Title(gvr.R()),
+			cases.Title(language.Und, cases.NoLower).String(gvr.R()),
 			nn[0],
 			c.Tally(health.S1),
 			nn[1],
@@ -199,15 +207,15 @@ func (p *Pulse) PulseFailed(err error) {
 }
 
 func (p *Pulse) bindKeys() {
-	p.actions.Add(ui.KeyActions{
+	p.actions.Merge(ui.NewKeyActionsFromMap(ui.KeyMap{
 		tcell.KeyEnter:   ui.NewKeyAction("Goto", p.enterCmd, true),
 		tcell.KeyTab:     ui.NewKeyAction("Next", p.nextFocusCmd(1), true),
 		tcell.KeyBacktab: ui.NewKeyAction("Prev", p.nextFocusCmd(-1), true),
-	})
+	}))
 
 	for i, v := range p.charts {
-		t := strings.Title(client.NewGVR(v.ID()).R())
-		p.actions[tcell.Key(ui.NumKeys[i])] = ui.NewKeyAction(t, p.sparkFocusCmd(i), true)
+		t := cases.Title(language.Und, cases.NoLower).String(client.NewGVR(v.ID()).R())
+		p.actions.Add(ui.NumKeys[i], ui.NewKeyAction(t, p.sparkFocusCmd(i), true))
 	}
 }
 
@@ -216,7 +224,7 @@ func (p *Pulse) keyboard(evt *tcell.EventKey) *tcell.EventKey {
 	if key == tcell.KeyRune {
 		key = tcell.Key(evt.Rune())
 	}
-	if a, ok := p.actions[key]; ok {
+	if a, ok := p.actions.Get(key); ok {
 		return a.Action(evt)
 	}
 
@@ -281,7 +289,7 @@ func (p *Pulse) GetTable() *Table {
 }
 
 // Actions returns active menu bindings.
-func (p *Pulse) Actions() ui.KeyActions {
+func (p *Pulse) Actions() *ui.KeyActions {
 	return p.actions
 }
 
@@ -340,7 +348,7 @@ func (p *Pulse) makeSP(loc image.Point, span image.Point, gvr string) *tchart.Sp
 	} else {
 		s.SetSeriesColors(p.app.Styles.Charts().DefaultChartColors.Colors()...)
 	}
-	s.SetLegend(fmt.Sprintf(" %s ", strings.Title(client.NewGVR(gvr).R())))
+	s.SetLegend(fmt.Sprintf(" %s ", cases.Title(language.Und, cases.NoLower).String(client.NewGVR(gvr).R())))
 	s.SetInputCapture(p.keyboard)
 	s.SetMultiSeries(true)
 	p.AddItem(s, loc.X, loc.Y, span.X, span.Y, 0, 0, true)
@@ -358,7 +366,7 @@ func (p *Pulse) makeGA(loc image.Point, span image.Point, gvr string) *tchart.Ga
 	} else {
 		g.SetSeriesColors(p.app.Styles.Charts().DefaultDialColors.Colors()...)
 	}
-	g.SetLegend(fmt.Sprintf(" %s ", strings.Title(client.NewGVR(gvr).R())))
+	g.SetLegend(fmt.Sprintf(" %s ", cases.Title(language.Und, cases.NoLower).String(client.NewGVR(gvr).R())))
 	g.SetInputCapture(p.keyboard)
 	p.AddItem(g, loc.X, loc.Y, span.X, span.Y, 0, 0, true)
 

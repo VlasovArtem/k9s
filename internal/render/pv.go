@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of K9s
+
 package render
 
 import (
@@ -6,64 +9,67 @@ import (
 	"strings"
 
 	"github.com/derailed/k9s/internal/client"
-	"github.com/gdamore/tcell/v2"
+	"github.com/derailed/k9s/internal/model1"
+	"github.com/derailed/tcell/v2"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
+const terminatingPhase = "Terminating"
+
 // PersistentVolume renders a K8s PersistentVolume to screen.
-type PersistentVolume struct{}
+type PersistentVolume struct {
+	Base
+}
 
 // ColorerFunc colors a resource row.
-func (p PersistentVolume) ColorerFunc() ColorerFunc {
-	return func(ns string, h Header, re RowEvent) tcell.Color {
-		if !Happy(ns, h, re.Row) {
-			return ErrColor
+func (p PersistentVolume) ColorerFunc() model1.ColorerFunc {
+	return func(ns string, h model1.Header, re *model1.RowEvent) tcell.Color {
+		c := model1.DefaultColorer(ns, h, re)
+
+		idx, ok := h.IndexOf("STATUS", true)
+		if ok {
+			return c
+		}
+		switch strings.TrimSpace(re.Row.Fields[idx]) {
+		case string(v1.VolumeBound):
+			return model1.StdColor
+		case string(v1.VolumeAvailable):
+			return tcell.ColorGreen
+		case string(v1.VolumePending):
+			return model1.PendingColor
+		case terminatingPhase:
+			return model1.CompletedColor
 		}
 
-		if re.Kind == EventAdd || re.Kind == EventUpdate {
-			return DefaultColorer(ns, h, re)
-		}
-
-		statusCol := h.IndexOf("STATUS", true)
-		if statusCol == -1 {
-			return DefaultColorer(ns, h, re)
-		}
-		switch strings.TrimSpace(re.Row.Fields[statusCol]) {
-		case "Bound":
-			return StdColor
-		case "Available":
-			return tcell.ColorYellow
-		}
-
-		return DefaultColorer(ns, h, re)
+		return c
 	}
 }
 
 // Header returns a header rbw.
-func (PersistentVolume) Header(string) Header {
-	return Header{
-		HeaderColumn{Name: "NAME"},
-		HeaderColumn{Name: "CAPACITY"},
-		HeaderColumn{Name: "ACCESS MODES"},
-		HeaderColumn{Name: "RECLAIM POLICY"},
-		HeaderColumn{Name: "STATUS"},
-		HeaderColumn{Name: "CLAIM"},
-		HeaderColumn{Name: "STORAGECLASS"},
-		HeaderColumn{Name: "REASON"},
-		HeaderColumn{Name: "VOLUMEMODE", Wide: true},
-		HeaderColumn{Name: "LABELS", Wide: true},
-		HeaderColumn{Name: "VALID", Wide: true},
-		HeaderColumn{Name: "AGE", Time: true, Decorator: AgeDecorator},
+func (PersistentVolume) Header(string) model1.Header {
+	return model1.Header{
+		model1.HeaderColumn{Name: "NAME"},
+		model1.HeaderColumn{Name: "CAPACITY", Capacity: true},
+		model1.HeaderColumn{Name: "ACCESS MODES"},
+		model1.HeaderColumn{Name: "RECLAIM POLICY"},
+		model1.HeaderColumn{Name: "STATUS"},
+		model1.HeaderColumn{Name: "CLAIM"},
+		model1.HeaderColumn{Name: "STORAGECLASS"},
+		model1.HeaderColumn{Name: "REASON"},
+		model1.HeaderColumn{Name: "VOLUMEMODE", Wide: true},
+		model1.HeaderColumn{Name: "LABELS", Wide: true},
+		model1.HeaderColumn{Name: "VALID", Wide: true},
+		model1.HeaderColumn{Name: "AGE", Time: true},
 	}
 }
 
 // Render renders a K8s resource to screen.
-func (p PersistentVolume) Render(o interface{}, ns string, r *Row) error {
+func (p PersistentVolume) Render(o interface{}, ns string, r *model1.Row) error {
 	raw, ok := o.(*unstructured.Unstructured)
 	if !ok {
-		return fmt.Errorf("Expected PersistentVolume, but got %T", o)
+		return fmt.Errorf("expected PersistentVolume, but got %T", o)
 	}
 	var pv v1.PersistentVolume
 	err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw.Object, &pv)
@@ -73,7 +79,7 @@ func (p PersistentVolume) Render(o interface{}, ns string, r *Row) error {
 
 	phase := pv.Status.Phase
 	if pv.ObjectMeta.DeletionTimestamp != nil {
-		phase = "Terminated"
+		phase = terminatingPhase
 	}
 	var claim string
 	if pv.Spec.ClaimRef != nil {
@@ -87,19 +93,19 @@ func (p PersistentVolume) Render(o interface{}, ns string, r *Row) error {
 	size := pv.Spec.Capacity[v1.ResourceStorage]
 
 	r.ID = client.MetaFQN(pv.ObjectMeta)
-	r.Fields = Fields{
+	r.Fields = model1.Fields{
 		pv.Name,
 		size.String(),
 		accessMode(pv.Spec.AccessModes),
 		string(pv.Spec.PersistentVolumeReclaimPolicy),
-		string(pv.Status.Phase),
+		string(phase),
 		claim,
 		class,
 		pv.Status.Reason,
 		p.volumeMode(pv.Spec.VolumeMode),
 		mapToStr(pv.Labels),
-		asStatus(p.diagnose(phase)),
-		toAge(pv.ObjectMeta.CreationTimestamp),
+		AsStatus(p.diagnose(phase)),
+		ToAge(pv.GetCreationTimestamp()),
 	}
 
 	return nil
@@ -109,6 +115,7 @@ func (PersistentVolume) diagnose(phase v1.PersistentVolumePhase) error {
 	if phase == v1.VolumeFailed {
 		return fmt.Errorf("failed to delete or recycle")
 	}
+
 	return nil
 }
 

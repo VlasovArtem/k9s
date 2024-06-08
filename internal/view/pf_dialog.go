@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of K9s
+
 package view
 
 import (
@@ -30,11 +33,15 @@ func ShowPortForwards(v ResourceViewer, path string, ports port.ContainerPortSpe
 		SetFieldTextColor(styles.FieldFgColor.Color()).
 		SetFieldBackgroundColor(styles.BgColor.Color())
 
-	address := v.App().Config.CurrentCluster().PortForwardAddress
+	ct, err := v.App().Config.K9s.ActiveContext()
+	if err != nil {
+		log.Error().Err(err).Msgf("No active context detected")
+		return
+	}
 
 	pf, err := aa.PreferredPorts(ports)
 	if err != nil {
-		log.Warn().Err(err).Msgf("unable to resolve ports")
+		log.Warn().Err(err).Msgf("unable to resolve ports on %s", path)
 	}
 
 	p1, p2 := pf.ToPortSpec(ports)
@@ -54,16 +61,15 @@ func ShowPortForwards(v ResourceViewer, path string, ports port.ContainerPortSpe
 	if loField.GetText() == "" {
 		loField.SetPlaceholder("Enter a local port")
 	}
+	address := ct.PortForwardAddress
 	f.AddInputField("Address:", address, fieldLen, nil, func(h string) {
 		address = h
 	})
 	for i := 0; i < 3; i++ {
-		field, ok := f.GetFormItem(i).(*tview.InputField)
-		if !ok {
-			continue
+		if field, ok := f.GetFormItem(i).(*tview.InputField); ok {
+			field.SetLabelColor(styles.LabelFgColor.Color())
+			field.SetFieldTextColor(styles.FieldFgColor.Color())
 		}
-		field.SetLabelColor(styles.LabelFgColor.Color())
-		field.SetFieldTextColor(styles.FieldFgColor.Color())
 	}
 
 	f.AddButton("OK", func() {
@@ -85,12 +91,10 @@ func ShowPortForwards(v ResourceViewer, path string, ports port.ContainerPortSpe
 		DismissPortForwards(v, pages)
 	})
 	for i := 0; i < 2; i++ {
-		b := f.GetButton(i)
-		if b == nil {
-			continue
+		if b := f.GetButton(i); b != nil {
+			b.SetBackgroundColorActivated(styles.ButtonFocusBgColor.Color())
+			b.SetLabelColorActivated(styles.ButtonFocusFgColor.Color())
 		}
-		b.SetBackgroundColorActivated(styles.ButtonFocusBgColor.Color())
-		b.SetLabelColorActivated(styles.ButtonFocusFgColor.Color())
 	}
 
 	modal := tview.NewModalForm("<PortForward>", f)

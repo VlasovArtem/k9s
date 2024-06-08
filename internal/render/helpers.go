@@ -1,60 +1,58 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of K9s
+
 package render
 
 import (
+	"context"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/derailed/k9s/internal/client"
+	"github.com/derailed/k9s/internal/vul"
 	"github.com/derailed/tview"
-	runewidth "github.com/mattn/go-runewidth"
+	"github.com/mattn/go-runewidth"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/text/language"
 	"golang.org/x/text/message"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/duration"
 )
 
-func runesToNum(rr []rune) int {
-	var n int
-	m := 1
+// ExtractImages returns a collection of container images.
+// !!BOZO!! If this has any legs?? enable scans on other container types.
+func ExtractImages(spec *v1.PodSpec) []string {
+	ii := make([]string, 0, len(spec.Containers))
+	for _, c := range spec.Containers {
+		ii = append(ii, c.Image)
+	}
+
+	return ii
+}
+
+func computeVulScore(m metav1.ObjectMeta, spec *v1.PodSpec) string {
+	if vul.ImgScanner == nil || vul.ImgScanner.ShouldExcludes(m) {
+		return "0"
+	}
+	ii := ExtractImages(spec)
+	vul.ImgScanner.Enqueue(context.Background(), ii...)
+
+	return vul.ImgScanner.Score(ii...)
+}
+
+func runesToNum(rr []rune) int64 {
+	var r int64
+	var m int64 = 1
 	for i := len(rr) - 1; i >= 0; i-- {
-		v := int(rr[i] - '0')
-		n += v * m
+		v := int64(rr[i] - '0')
+		r += v * m
 		m *= 10
 	}
 
-	return n
-}
-
-func durationToSeconds(duration string) string {
-	if len(duration) == 0 {
-		return duration
-	}
-
-	num := make([]rune, 0, 5)
-	var n, m int
-	for _, r := range duration {
-		switch r {
-		case 'y':
-			m = 365 * 24 * 60 * 60
-		case 'd':
-			m = 24 * 60 * 60
-		case 'h':
-			m = 60 * 60
-		case 'm':
-			m = 60
-		case 's':
-			m = 1
-		default:
-			num = append(num, r)
-			continue
-		}
-		n, num = n+runesToNum(num)*m, num[:0]
-	}
-
-	return strconv.Itoa(n)
+	return r
 }
 
 // AsThousands prints a number with thousand separator.
@@ -63,19 +61,8 @@ func AsThousands(n int64) string {
 	return p.Sprintf("%d", n)
 }
 
-// Happy returns true if resource is happy, false otherwise.
-func Happy(ns string, h Header, r Row) bool {
-	if len(r.Fields) == 0 {
-		return true
-	}
-	validCol := h.IndexOf("VALID", true)
-	if validCol < 0 {
-		return true
-	}
-	return strings.TrimSpace(r.Fields[validCol]) == ""
-}
-
-func asStatus(err error) string {
+// AsStatus returns error as string.
+func AsStatus(err error) string {
 	if err == nil {
 		return ""
 	}
@@ -110,13 +97,6 @@ func blank(s []string) bool {
 		}
 	}
 	return true
-}
-
-func strpToStr(p *string) string {
-	if p == nil || *p == "" {
-		return MissingValue
-	}
-	return *p
 }
 
 // Join a slice of strings, skipping blanks.
@@ -173,6 +153,13 @@ func missing(s string) string {
 	return check(s, MissingValue)
 }
 
+func naStrings(ss []string) string {
+	if len(ss) == 0 {
+		return NAValue
+	}
+	return strings.Join(ss, ",")
+}
+
 func na(s string) string {
 	return check(s, NAValue)
 }
@@ -194,17 +181,26 @@ func boolToStr(b bool) string {
 	}
 }
 
-func toAge(timestamp metav1.Time) string {
-	return time.Since(timestamp.Time).String()
+// ToAge converts time to human duration.
+func ToAge(t metav1.Time) string {
+	if t.IsZero() {
+		return UnknownValue
+	}
+
+	return duration.HumanDuration(time.Since(t.Time))
 }
 
 func toAgeHuman(s string) string {
-	d, err := time.ParseDuration(s)
+	if len(s) == 0 {
+		return UnknownValue
+	}
+
+	t, err := time.Parse(time.RFC3339, s)
 	if err != nil {
 		return NAValue
 	}
 
-	return duration.HumanDuration(d)
+	return duration.HumanDuration(time.Since(t))
 }
 
 // Truncate a string to the given l and suffix ellipsis if needed.
@@ -289,15 +285,22 @@ func boolPtrToStr(b *bool) string {
 	return boolToStr(*b)
 }
 
-// Check if string is in a string list.
-func in(ll []string, s string) bool {
-	for _, l := range ll {
-		if l == s {
-			return true
-		}
+func strPtrToStr(s *string) string {
+	if s == nil {
+		return ""
 	}
-	return false
+	return *s
 }
+
+// // Check if string is in a string list.
+// func in(ll []string, s string) bool {
+// 	for _, l := range ll {
+// 		if l == s {
+// 			return true
+// 		}
+// 	}
+// 	return false
+// }
 
 // Pad a string up to the given length or truncates if greater than length.
 func Pad(s string, width int) string {
@@ -312,29 +315,29 @@ func Pad(s string, width int) string {
 	return s + strings.Repeat(" ", width-len(s))
 }
 
-// Converts labels string to map.
-func labelize(labels string) map[string]string {
-	ll := strings.Split(labels, ",")
-	data := make(map[string]string, len(ll))
+// // Converts labels string to map.
+// func labelize(labels string) map[string]string {
+// 	ll := strings.Split(labels, ",")
+// 	data := make(map[string]string, len(ll))
 
-	for _, l := range ll {
-		tokens := strings.Split(l, "=")
-		if len(tokens) == 2 {
-			data[tokens[0]] = tokens[1]
-		}
-	}
+// 	for _, l := range ll {
+// 		tokens := strings.Split(l, "=")
+// 		if len(tokens) == 2 {
+// 			data[tokens[0]] = tokens[1]
+// 		}
+// 	}
 
-	return data
-}
+// 	return data
+// }
 
-func sortLabels(m map[string]string) (keys, vals []string) {
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		vals = append(vals, m[k])
-	}
+// func sortLabels(m map[string]string) (keys, vals []string) {
+// 	for k := range m {
+// 		keys = append(keys, k)
+// 	}
+// 	sort.Strings(keys)
+// 	for _, k := range keys {
+// 		vals = append(vals, m[k])
+// 	}
 
-	return
-}
+// 	return
+// }

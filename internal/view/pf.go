@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of K9s
+
 package view
 
 import (
@@ -11,10 +14,9 @@ import (
 	"github.com/derailed/k9s/internal/dao"
 	"github.com/derailed/k9s/internal/model"
 	"github.com/derailed/k9s/internal/perf"
-	"github.com/derailed/k9s/internal/render"
 	"github.com/derailed/k9s/internal/ui"
+	"github.com/derailed/tcell/v2"
 	"github.com/derailed/tview"
-	"github.com/gdamore/tcell/v2"
 	"github.com/rs/zerolog/log"
 )
 
@@ -34,7 +36,6 @@ func NewPortForward(gvr client.GVR) ResourceViewer {
 	}
 	p.GetTable().SetBorderFocusColor(tcell.ColorDodgerBlue)
 	p.GetTable().SetSelectedStyle(tcell.StyleDefault.Foreground(tcell.ColorWhite).Background(tcell.ColorDodgerBlue).Attributes(tcell.AttrNone))
-	p.GetTable().SetColorerFn(render.PortForward{}.ColorerFunc())
 	p.GetTable().SetSortCol(ageCol, true)
 	p.SetContextFn(p.portForwardContext)
 	p.AddBindKeysFn(p.bindKeys)
@@ -43,13 +44,17 @@ func NewPortForward(gvr client.GVR) ResourceViewer {
 }
 
 func (p *PortForward) portForwardContext(ctx context.Context) context.Context {
-	return context.WithValue(ctx, internal.KeyBenchCfg, p.App().BenchFile)
+	if bc := p.App().BenchFile; bc != "" {
+		return context.WithValue(ctx, internal.KeyBenchCfg, p.App().BenchFile)
+	}
+
+	return ctx
 }
 
-func (p *PortForward) bindKeys(aa ui.KeyActions) {
-	aa.Add(ui.KeyActions{
+func (p *PortForward) bindKeys(aa *ui.KeyActions) {
+	aa.Bulk(ui.KeyMap{
 		tcell.KeyEnter: ui.NewKeyAction("View Benchmarks", p.showBenchCmd, true),
-		tcell.KeyCtrlL: ui.NewKeyAction("Benchmark Run/Stop", p.toggleBenchCmd, true),
+		ui.KeyB:        ui.NewKeyAction("Benchmark Run/Stop", p.toggleBenchCmd, true),
 		tcell.KeyCtrlD: ui.NewKeyAction("Delete", p.deleteCmd, true),
 		ui.KeyShiftP:   ui.NewKeyAction("Sort Ports", p.GetTable().SortColCmd("PORTS", true), false),
 		ui.KeyShiftU:   ui.NewKeyAction("Sort URL", p.GetTable().SortColCmd("URL", true), false),
@@ -59,7 +64,7 @@ func (p *PortForward) bindKeys(aa ui.KeyActions) {
 func (p *PortForward) showBenchCmd(evt *tcell.EventKey) *tcell.EventKey {
 	b := NewBenchmark(client.NewGVR("benchmarks"))
 	b.SetContextFn(p.getContext)
-	if err := p.App().inject(b); err != nil {
+	if err := p.App().inject(b, false); err != nil {
 		p.App().Flash().Err(err)
 	}
 
@@ -107,16 +112,25 @@ func (p *PortForward) toggleBenchCmd(evt *tcell.EventKey) *tcell.EventKey {
 	}
 
 	p.App().Status(model.FlashWarn, "Benchmark in progress...")
-	go p.runBenchmark()
+	go func() {
+		if err := p.runBenchmark(); err != nil {
+			log.Error().Err(err).Msgf("Benchmark run failed")
+		}
+	}()
 
 	return nil
 }
 
-func (p *PortForward) runBenchmark() {
+func (p *PortForward) runBenchmark() error {
 	log.Debug().Msg("Bench starting...")
 
-	p.bench.Run(p.App().Config.K9s.CurrentCluster, func() {
-		log.Debug().Msg("Bench Completed!")
+	ct, err := p.App().Config.K9s.ActiveContext()
+	if err != nil {
+		return err
+	}
+	name := p.App().Config.K9s.ActiveContextName()
+	p.bench.Run(ct.ClusterName, name, func() {
+		log.Debug().Msgf("Benchmark %q Completed!", name)
 		p.App().QueueUpdate(func() {
 			if p.bench.Canceled() {
 				p.App().Status(model.FlashInfo, "Benchmark canceled")
@@ -131,6 +145,8 @@ func (p *PortForward) runBenchmark() {
 			}()
 		})
 	})
+
+	return nil
 }
 
 func (p *PortForward) deleteCmd(evt *tcell.EventKey) *tcell.EventKey {
@@ -158,11 +174,11 @@ func (p *PortForward) deleteCmd(evt *tcell.EventKey) *tcell.EventKey {
 			return nil
 		}
 	}
-	showModal(p.App().Content.Pages, msg, func() {
+	showModal(p.App(), msg, func() {
 		for _, s := range selections {
 			var pf dao.PortForward
 			pf.Init(p.App().factory, client.NewGVR("portforwards"))
-			if err := pf.Delete(s, true, true); err != nil {
+			if err := pf.Delete(context.Background(), s, nil, dao.DefaultGrace); err != nil {
 				p.App().Flash().Err(err)
 				return
 			}
@@ -177,19 +193,23 @@ func (p *PortForward) deleteCmd(evt *tcell.EventKey) *tcell.EventKey {
 // ----------------------------------------------------------------------------
 // Helpers...
 
-var selRx = regexp.MustCompile(`\A([\w-]+)/([\w-]+)\|([\w-]+)\|(\d+):(\d+)`)
+var selRx = regexp.MustCompile(`\A([\w-]+)/([\w-]+)\|([\w-]+)?\|(\d+):(\d+)`)
 
 func pfToHuman(s string) (string, error) {
 	mm := selRx.FindStringSubmatch(s)
 	if len(mm) < 6 {
-		return "", fmt.Errorf("Unable to parse selection %s", s)
+		return "", fmt.Errorf("unable to parse selection %s", s)
 	}
+
 	return fmt.Sprintf("%s::%s %s->%s", mm[2], mm[3], mm[4], mm[5]), nil
 }
 
-func showModal(p *ui.Pages, msg string, ok func()) {
+func showModal(a *App, msg string, ok func()) {
+	p := a.Content.Pages
+	styles := a.Styles.Dialog()
 	m := tview.NewModal().
 		AddButtons([]string{"Cancel", "OK"}).
+		SetButtonBackgroundColor(styles.ButtonBgColor.Color()).
 		SetTextColor(tcell.ColorFuchsia).
 		SetText(msg).
 		SetDoneFunc(func(_ int, b string) {

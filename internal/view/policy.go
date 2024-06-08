@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of K9s
+
 package view
 
 import (
@@ -5,9 +8,8 @@ import (
 
 	"github.com/derailed/k9s/internal"
 	"github.com/derailed/k9s/internal/client"
-	"github.com/derailed/k9s/internal/render"
 	"github.com/derailed/k9s/internal/ui"
-	"github.com/gdamore/tcell/v2"
+	"github.com/derailed/tcell/v2"
 )
 
 const (
@@ -30,9 +32,8 @@ func NewPolicy(app *App, subject, name string) *Policy {
 		subjectKind:    subject,
 		subjectName:    name,
 	}
-	p.GetTable().SetColorerFn(render.Policy{}.ColorerFunc())
 	p.AddBindKeysFn(p.bindKeys)
-	p.GetTable().SetSortCol(nameCol, false)
+	p.GetTable().SetSortCol("API-GROUP", false)
 	p.SetContextFn(p.subjectCtx)
 	p.GetTable().SetEnterFn(blankEnterFn)
 
@@ -45,11 +46,11 @@ func (p *Policy) subjectCtx(ctx context.Context) context.Context {
 	return context.WithValue(ctx, internal.KeySubjectName, p.subjectName)
 }
 
-func (p *Policy) bindKeys(aa ui.KeyActions) {
+func (p *Policy) bindKeys(aa *ui.KeyActions) {
 	aa.Delete(ui.KeyShiftA, tcell.KeyCtrlSpace, ui.KeySpace)
-	aa.Add(ui.KeyActions{
+	aa.Bulk(ui.KeyMap{
 		ui.KeyShiftN: ui.NewKeyAction("Sort Name", p.GetTable().SortColCmd(nameCol, true), false),
-		ui.KeyShiftO: ui.NewKeyAction("Sort Group", p.GetTable().SortColCmd("GROUP", true), false),
+		ui.KeyShiftA: ui.NewKeyAction("Sort Api-Group", p.GetTable().SortColCmd("API-GROUP", true), false),
 		ui.KeyShiftB: ui.NewKeyAction("Sort Binding", p.GetTable().SortColCmd("BINDING", true), false),
 	})
 }

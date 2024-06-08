@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of K9s
+
 package render
 
 import (
@@ -7,57 +10,65 @@ import (
 	"strings"
 
 	"github.com/derailed/k9s/internal/client"
-	metav1beta1 "k8s.io/apimachinery/pkg/apis/meta/v1beta1"
+	"github.com/derailed/k9s/internal/model1"
+	"github.com/rs/zerolog/log"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 const ageTableCol = "Age"
 
 // Generic renders a generic resource to screen.
 type Generic struct {
-	table *metav1beta1.Table
-
+	Base
+	table    *metav1.Table
+	header   model1.Header
 	ageIndex int
 }
 
-// Happy returns true if resource is happy, false otherwise.
-func (Generic) Happy(ns string, r Row) bool {
+func (*Generic) IsGeneric() bool {
 	return true
 }
 
 // SetTable sets the tabular resource.
-func (g *Generic) SetTable(t *metav1beta1.Table) {
+func (g *Generic) SetTable(ns string, t *metav1.Table) {
 	g.table = t
+	g.header = g.Header(ns)
 }
 
 // ColorerFunc colors a resource row.
-func (Generic) ColorerFunc() ColorerFunc {
-	return DefaultColorer
+func (*Generic) ColorerFunc() model1.ColorerFunc {
+	return model1.DefaultColorer
 }
 
 // Header returns a header row.
-func (g *Generic) Header(ns string) Header {
-	if g.table == nil {
-		return Header{}
+func (g *Generic) Header(ns string) model1.Header {
+	if g.header != nil {
+		return g.header
 	}
-	h := make(Header, 0, len(g.table.ColumnDefinitions))
-	h = append(h, HeaderColumn{Name: "NAMESPACE"})
+	if g.table == nil {
+		return model1.Header{}
+	}
+	h := make(model1.Header, 0, len(g.table.ColumnDefinitions))
+	if !client.IsClusterScoped(ns) {
+		h = append(h, model1.HeaderColumn{Name: "NAMESPACE"})
+	}
 	for i, c := range g.table.ColumnDefinitions {
 		if c.Name == ageTableCol {
 			g.ageIndex = i
 			continue
 		}
-		h = append(h, HeaderColumn{Name: strings.ToUpper(c.Name)})
+		h = append(h, model1.HeaderColumn{Name: strings.ToUpper(c.Name)})
 	}
 	if g.ageIndex > 0 {
-		h = append(h, HeaderColumn{Name: "AGE", Time: true})
+		h = append(h, model1.HeaderColumn{Name: "AGE", Time: true})
 	}
 
 	return h
 }
 
 // Render renders a K8s resource to screen.
-func (g *Generic) Render(o interface{}, ns string, r *Row) error {
-	row, ok := o.(metav1beta1.TableRow)
+func (g *Generic) Render(o interface{}, ns string, r *model1.Row) error {
+	row, ok := o.(metav1.TableRow)
 	if !ok {
 		return fmt.Errorf("expecting a TableRow but got %T", o)
 	}
@@ -70,12 +81,14 @@ func (g *Generic) Render(o interface{}, ns string, r *Row) error {
 		return fmt.Errorf("expecting row 0 to be a string but got %T", row.Cells[0])
 	}
 	r.ID = client.FQN(nns, name)
-	r.Fields = make(Fields, 0, len(g.Header(ns)))
-	r.Fields = append(r.Fields, nns)
-	var ageCell interface{}
+	r.Fields = make(model1.Fields, 0, len(g.Header(ns)))
+	if !client.IsClusterScoped(ns) {
+		r.Fields = append(r.Fields, nns)
+	}
+	var duration interface{}
 	for i, c := range row.Cells {
 		if g.ageIndex > 0 && i == g.ageIndex {
-			ageCell = c
+			duration = c
 			continue
 		}
 		if c == nil {
@@ -84,8 +97,11 @@ func (g *Generic) Render(o interface{}, ns string, r *Row) error {
 		}
 		r.Fields = append(r.Fields, fmt.Sprintf("%v", c))
 	}
-	if ageCell != nil {
-		r.Fields = append(r.Fields, fmt.Sprintf("%v", ageCell))
+	if d, ok := duration.(string); ok {
+		r.Fields = append(r.Fields, d)
+	} else if g.ageIndex > 0 {
+		log.Warn().Msgf("No Duration detected on age field")
+		r.Fields = append(r.Fields, NAValue)
 	}
 
 	return nil

@@ -1,42 +1,43 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of K9s
+
 package render
 
 import (
 	"fmt"
 
 	"github.com/derailed/k9s/internal/client"
+	"github.com/derailed/k9s/internal/model1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // Role renders a K8s Role to screen.
-type Role struct{}
-
-// ColorerFunc colors a resource row.
-func (Role) ColorerFunc() ColorerFunc {
-	return DefaultColorer
+type Role struct {
+	Base
 }
 
 // Header returns a header row.
-func (Role) Header(ns string) Header {
-	var h Header
+func (Role) Header(ns string) model1.Header {
+	var h model1.Header
 	if client.IsAllNamespaces(ns) {
-		h = append(h, HeaderColumn{Name: "NAMESPACE"})
+		h = append(h, model1.HeaderColumn{Name: "NAMESPACE"})
 	}
 
 	return append(h,
-		HeaderColumn{Name: "NAME"},
-		HeaderColumn{Name: "LABELS", Wide: true},
-		HeaderColumn{Name: "VALID", Wide: true},
-		HeaderColumn{Name: "AGE", Time: true, Decorator: AgeDecorator},
+		model1.HeaderColumn{Name: "NAME"},
+		model1.HeaderColumn{Name: "LABELS", Wide: true},
+		model1.HeaderColumn{Name: "VALID", Wide: true},
+		model1.HeaderColumn{Name: "AGE", Time: true},
 	)
 }
 
 // Render renders a K8s resource to screen.
-func (r Role) Render(o interface{}, ns string, row *Row) error {
+func (r Role) Render(o interface{}, ns string, row *model1.Row) error {
 	raw, ok := o.(*unstructured.Unstructured)
 	if !ok {
-		return fmt.Errorf("Expected Role, but got %T", o)
+		return fmt.Errorf("expected Role, but got %T", o)
 	}
 	var ro rbacv1.Role
 	err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw.Object, &ro)
@@ -45,7 +46,7 @@ func (r Role) Render(o interface{}, ns string, row *Row) error {
 	}
 
 	row.ID = client.MetaFQN(ro.ObjectMeta)
-	row.Fields = make(Fields, 0, len(r.Header(ns)))
+	row.Fields = make(model1.Fields, 0, len(r.Header(ns)))
 	if client.IsAllNamespaces(ns) {
 		row.Fields = append(row.Fields, ro.Namespace)
 	}
@@ -53,7 +54,7 @@ func (r Role) Render(o interface{}, ns string, row *Row) error {
 		ro.Name,
 		mapToStr(ro.Labels),
 		"",
-		toAge(ro.ObjectMeta.CreationTimestamp),
+		ToAge(ro.GetCreationTimestamp()),
 	)
 
 	return nil

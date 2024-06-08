@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of K9s
+
 package dao
 
 import (
@@ -35,7 +38,7 @@ func (c *Container) List(ctx context.Context, _ string) ([]runtime.Object, error
 		cmx client.ContainersMetrics
 		err error
 	)
-	if withMx, ok := ctx.Value(internal.KeyWithMetrics).(bool); withMx || !ok {
+	if withMx, ok := ctx.Value(internal.KeyWithMetrics).(bool); ok && withMx {
 		cmx, _ = client.DialMetrics(c.Client()).FetchContainersMetrics(ctx, fqn)
 	}
 
@@ -55,11 +58,11 @@ func (c *Container) List(ctx context.Context, _ string) ([]runtime.Object, error
 }
 
 // TailLogs tails a given container logs.
-func (c *Container) TailLogs(ctx context.Context, logChan LogChan, opts *LogOptions) error {
+func (c *Container) TailLogs(ctx context.Context, opts *LogOptions) ([]LogChan, error) {
 	po := Pod{}
 	po.Init(c.Factory, client.NewGVR("v1/pods"))
 
-	return po.TailLogs(ctx, logChan, opts)
+	return po.TailLogs(ctx, opts)
 }
 
 // ----------------------------------------------------------------------------
@@ -71,7 +74,7 @@ func makeContainerRes(co v1.Container, po *v1.Pod, cmx *mv1beta1.ContainerMetric
 		Status:    getContainerStatus(co.Name, po.Status),
 		MX:        cmx,
 		IsInit:    isInit,
-		Age:       po.ObjectMeta.CreationTimestamp,
+		Age:       po.GetCreationTimestamp(),
 	}
 }
 
@@ -91,7 +94,7 @@ func getContainerStatus(co string, status v1.PodStatus) *v1.ContainerStatus {
 }
 
 func (c *Container) fetchPod(fqn string) (*v1.Pod, error) {
-	o, err := c.Factory.Get("v1/pods", fqn, true, labels.Everything())
+	o, err := c.getFactory().Get("v1/pods", fqn, true, labels.Everything())
 	if err != nil {
 		return nil, err
 	}

@@ -1,47 +1,46 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of K9s
+
 package cmd
 
 import (
+	"testing"
+
 	"github.com/derailed/k9s/internal/config"
 	"github.com/stretchr/testify/assert"
-	"testing"
 )
 
 func Test_getScreenDumpDirForInfo(t *testing.T) {
-	tests := []struct {
-		name                  string
+	tests := map[string]struct {
 		k9sConfigFile         string
 		expectedScreenDumpDir string
 	}{
-		{
-			name:                  "withK9sConfigFile",
-			k9sConfigFile:         "testdata/k9s.yml",
+		"withK9sConfigFile": {
+			k9sConfigFile:         "testdata/k9s.yaml",
 			expectedScreenDumpDir: "/tmp",
 		},
-		{
-			name:                  "withEmptyK9sConfigFile",
+		"withEmptyK9sConfigFile": {
 			k9sConfigFile:         "",
-			expectedScreenDumpDir: config.K9sDefaultScreenDumpDir,
+			expectedScreenDumpDir: config.AppDumpsDir,
 		},
-		{
-			name:                  "withInvalidK9sConfigFilePath",
+		"withInvalidK9sConfigFilePath": {
 			k9sConfigFile:         "invalid",
-			expectedScreenDumpDir: config.K9sDefaultScreenDumpDir,
+			expectedScreenDumpDir: config.AppDumpsDir,
 		},
-		{
-			name:                  "withScreenDumpDirEmptyInK9sConfigFile",
-			k9sConfigFile:         "testdata/k9s1.yml",
-			expectedScreenDumpDir: config.K9sDefaultScreenDumpDir,
+		"withScreenDumpDirEmptyInK9sConfigFile": {
+			k9sConfigFile:         "testdata/k9s1.yaml",
+			expectedScreenDumpDir: config.AppDumpsDir,
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			initK9sConfigFile := config.K9sConfigFile
+	for k := range tests {
+		u := tests[k]
+		t.Run(k, func(t *testing.T) {
+			initK9sConfigFile := config.AppConfigFile
+			config.AppConfigFile = u.k9sConfigFile
 
-			config.K9sConfigFile = tt.k9sConfigFile
+			assert.Equal(t, u.expectedScreenDumpDir, getScreenDumpDirForInfo())
 
-			assert.Equal(t, tt.expectedScreenDumpDir, getScreenDumpDirForInfo())
-
-			config.K9sConfigFile = initK9sConfigFile
+			config.AppConfigFile = initK9sConfigFile
 		})
 	}
 }

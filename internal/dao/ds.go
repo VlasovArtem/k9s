@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Authors of K9s
+
 package dao
 
 import (
@@ -8,6 +11,7 @@ import (
 
 	"github.com/derailed/k9s/internal"
 	"github.com/derailed/k9s/internal/client"
+	"github.com/derailed/k9s/internal/render"
 	"github.com/derailed/k9s/internal/watch"
 	"github.com/rs/zerolog/log"
 	appsv1 "k8s.io/api/apps/v1"
@@ -29,6 +33,7 @@ var (
 	_ Restartable     = (*DaemonSet)(nil)
 	_ Controller      = (*DaemonSet)(nil)
 	_ ContainsPodSpec = (*DaemonSet)(nil)
+	_ ImageLister     = (*DaemonSet)(nil)
 )
 
 // DaemonSet represents a K8s daemonset.
@@ -36,14 +41,19 @@ type DaemonSet struct {
 	Resource
 }
 
-// IsHappy check for happy deployments.
-func (d *DaemonSet) IsHappy(ds appsv1.DaemonSet) bool {
-	return ds.Status.DesiredNumberScheduled == ds.Status.CurrentNumberScheduled
+// ListImages lists container images.
+func (d *DaemonSet) ListImages(ctx context.Context, fqn string) ([]string, error) {
+	ds, err := d.GetInstance(fqn)
+	if err != nil {
+		return nil, err
+	}
+
+	return render.ExtractImages(&ds.Spec.Template.Spec), nil
 }
 
 // Restart a DaemonSet rollout.
 func (d *DaemonSet) Restart(ctx context.Context, path string) error {
-	o, err := d.Factory.Get("apps/v1/daemonsets", path, true, labels.Everything())
+	o, err := d.getFactory().Get("apps/v1/daemonsets", path, true, labels.Everything())
 	if err != nil {
 		return err
 	}
@@ -53,7 +63,7 @@ func (d *DaemonSet) Restart(ctx context.Context, path string) error {
 		return err
 	}
 
-	auth, err := d.Client().CanI(ds.Namespace, "apps/v1/daemonsets", []string{client.PatchVerb})
+	auth, err := d.Client().CanI(ds.Namespace, "apps/v1/daemonsets", ds.Name, client.PatchAccess)
 	if err != nil {
 		return err
 	}
@@ -91,54 +101,59 @@ func (d *DaemonSet) Restart(ctx context.Context, path string) error {
 }
 
 // TailLogs tail logs for all pods represented by this DaemonSet.
-func (d *DaemonSet) TailLogs(ctx context.Context, c LogChan, opts *LogOptions) error {
+func (d *DaemonSet) TailLogs(ctx context.Context, opts *LogOptions) ([]LogChan, error) {
 	ds, err := d.GetInstance(opts.Path)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if ds.Spec.Selector == nil || len(ds.Spec.Selector.MatchLabels) == 0 {
-		return fmt.Errorf("no valid selector found on daemonset %q", opts.Path)
+		return nil, fmt.Errorf("no valid selector found on daemonset %q", opts.Path)
 	}
 
-	return podLogs(ctx, c, ds.Spec.Selector.MatchLabels, opts)
+	return podLogs(ctx, ds.Spec.Selector.MatchLabels, opts)
 }
 
-func podLogs(ctx context.Context, out LogChan, sel map[string]string, opts *LogOptions) error {
+func podLogs(ctx context.Context, sel map[string]string, opts *LogOptions) ([]LogChan, error) {
 	f, ok := ctx.Value(internal.KeyFactory).(*watch.Factory)
 	if !ok {
-		return errors.New("expecting a context factory")
+		return nil, errors.New("expecting a context factory")
 	}
 	ls, err := metav1.ParseToLabelSelector(toSelector(sel))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	lsel, err := metav1.LabelSelectorAsSelector(ls)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	ns, _ := client.Namespaced(opts.Path)
 	oo, err := f.List("v1/pods", ns, true, lsel)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	opts.MultiPods = true
 
-	po := Pod{}
+	var po Pod
 	po.Init(f, client.NewGVR("v1/pods"))
+
+	outs := make([]LogChan, 0, len(oo))
 	for _, o := range oo {
 		u, ok := o.(*unstructured.Unstructured)
 		if !ok {
-			return fmt.Errorf("expected unstructured got %t", o)
+			return nil, fmt.Errorf("expected unstructured got %t", o)
 		}
 		opts = opts.Clone()
 		opts.Path = client.FQN(u.GetNamespace(), u.GetName())
-		if err := po.TailLogs(ctx, out, opts); err != nil {
-			return err
+		cc, err := po.TailLogs(ctx, opts)
+		if err != nil {
+			return nil, err
 		}
+		outs = append(outs, cc...)
 	}
-	return nil
+
+	return outs, nil
 }
 
 // Pod returns a pod victim by name.
@@ -153,7 +168,7 @@ func (d *DaemonSet) Pod(fqn string) (string, error) {
 
 // GetInstance returns a daemonset instance.
 func (d *DaemonSet) GetInstance(fqn string) (*appsv1.DaemonSet, error) {
-	o, err := d.Factory.Get(d.gvr.String(), fqn, true, labels.Everything())
+	o, err := d.getFactory().Get(d.gvrStr(), fqn, true, labels.Everything())
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +185,7 @@ func (d *DaemonSet) GetInstance(fqn string) (*appsv1.DaemonSet, error) {
 // ScanSA scans for serviceaccount refs.
 func (d *DaemonSet) ScanSA(ctx context.Context, fqn string, wait bool) (Refs, error) {
 	ns, n := client.Namespaced(fqn)
-	oo, err := d.Factory.List(d.GVR(), ns, wait, labels.Everything())
+	oo, err := d.getFactory().List(d.GVR(), ns, wait, labels.Everything())
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +197,7 @@ func (d *DaemonSet) ScanSA(ctx context.Context, fqn string, wait bool) (Refs, er
 		if err != nil {
 			return nil, errors.New("expecting DaemonSet resource")
 		}
-		if ds.Spec.Template.Spec.ServiceAccountName == n {
+		if serviceAccountMatches(ds.Spec.Template.Spec.ServiceAccountName, n) {
 			refs = append(refs, Ref{
 				GVR: d.GVR(),
 				FQN: client.FQN(ds.Namespace, ds.Name),
@@ -194,9 +209,9 @@ func (d *DaemonSet) ScanSA(ctx context.Context, fqn string, wait bool) (Refs, er
 }
 
 // Scan scans for cluster refs.
-func (d *DaemonSet) Scan(ctx context.Context, gvr, fqn string, wait bool) (Refs, error) {
+func (d *DaemonSet) Scan(ctx context.Context, gvr client.GVR, fqn string, wait bool) (Refs, error) {
 	ns, n := client.Namespaced(fqn)
-	oo, err := d.Factory.List(d.GVR(), ns, wait, labels.Everything())
+	oo, err := d.getFactory().List(d.GVR(), ns, wait, labels.Everything())
 	if err != nil {
 		return nil, err
 	}
@@ -209,7 +224,7 @@ func (d *DaemonSet) Scan(ctx context.Context, gvr, fqn string, wait bool) (Refs,
 			return nil, errors.New("expecting StatefulSet resource")
 		}
 		switch gvr {
-		case "v1/configmaps":
+		case CmGVR:
 			if !hasConfigMap(&ds.Spec.Template.Spec, n) {
 				continue
 			}
@@ -217,7 +232,7 @@ func (d *DaemonSet) Scan(ctx context.Context, gvr, fqn string, wait bool) (Refs,
 				GVR: d.GVR(),
 				FQN: client.FQN(ds.Namespace, ds.Name),
 			})
-		case "v1/secrets":
+		case SecGVR:
 			found, err := hasSecret(d.Factory, &ds.Spec.Template.Spec, ds.Namespace, n, wait)
 			if err != nil {
 				log.Warn().Err(err).Msgf("locate secret %q", fqn)
@@ -230,8 +245,16 @@ func (d *DaemonSet) Scan(ctx context.Context, gvr, fqn string, wait bool) (Refs,
 				GVR: d.GVR(),
 				FQN: client.FQN(ds.Namespace, ds.Name),
 			})
-		case "v1/persistentvolumeclaims":
+		case PvcGVR:
 			if !hasPVC(&ds.Spec.Template.Spec, n) {
+				continue
+			}
+			refs = append(refs, Ref{
+				GVR: d.GVR(),
+				FQN: client.FQN(ds.Namespace, ds.Name),
+			})
+		case PcGVR:
+			if !hasPC(&ds.Spec.Template.Spec, n) {
 				continue
 			}
 			refs = append(refs, Ref{
@@ -257,7 +280,7 @@ func (d *DaemonSet) GetPodSpec(path string) (*v1.PodSpec, error) {
 // SetImages sets container images.
 func (d *DaemonSet) SetImages(ctx context.Context, path string, imageSpecs ImageSpecs) error {
 	ns, n := client.Namespaced(path)
-	auth, err := d.Client().CanI(ns, "apps/v1/daemonset", []string{client.PatchVerb})
+	auth, err := d.Client().CanI(ns, "apps/v1/daemonset", n, client.PatchAccess)
 	if err != nil {
 		return err
 	}
