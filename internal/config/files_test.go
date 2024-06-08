@@ -19,20 +19,24 @@ func TestInitLogLoc(t *testing.T) {
 	assert.NoError(t, err)
 
 	uu := map[string]struct {
-		dir string
-		e   string
+		dir     string
+		logsDir string
+		e       string
 	}{
 		"log-env": {
-			dir: "/tmp/test/k9s/logs",
-			e:   "/tmp/test/k9s/logs/k9s.log",
+			dir:     "/tmp/test/k9s/logs",
+			logsDir: "/tmp/test/k9s/logs",
+			e:       "/tmp/test/k9s/logs/k9s.log",
 		},
 		"xdg-env": {
-			dir: "/tmp/test/xdg-state",
-			e:   "/tmp/test/xdg-state/k9s/k9s.log",
+			dir:     "/tmp/test/xdg-state",
+			logsDir: "/tmp/test/xdg-state/k9s",
+			e:       "/tmp/test/xdg-state/k9s/k9s.log",
 		},
 		"cfg-env": {
-			dir: "/tmp/test/k9s-test",
-			e:   filepath.Join(tmp, "k9s.log"),
+			dir:     "/tmp/test/k9s-test",
+			logsDir: tmp,
+			e:       filepath.Join(tmp, "k9s.log"),
 		},
 	}
 
@@ -54,6 +58,7 @@ func TestInitLogLoc(t *testing.T) {
 			err := config.InitLogLoc()
 			assert.NoError(t, err)
 			assert.Equal(t, u.e, config.AppLogFile)
+			assert.Equal(t, u.logsDir, config.AppLogsDir)
 			assert.NoError(t, os.RemoveAll(config.AppLogFile))
 		})
 	}

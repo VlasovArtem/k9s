@@ -69,6 +69,9 @@ var (
 	// AppLogFile tracks k9s logs file.
 	AppLogFile string
 
+	// AppLogsDir tracks k9s logs directory.
+	AppLogsDir string
+
 	// AppViewsFile tracks custom views config file.
 	AppViewsFile string
 
@@ -104,6 +107,7 @@ func InitLogLoc() error {
 	if err := data.EnsureFullPath(appLogDir, data.DefaultDirMod); err != nil {
 		return err
 	}
+	AppLogsDir = appLogDir
 	AppLogFile = filepath.Join(appLogDir, K9sLogsFile)
 
 	return nil

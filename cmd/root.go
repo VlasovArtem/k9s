@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"runtime/debug"
@@ -101,8 +102,9 @@ func run(cmd *cobra.Command, args []string) error {
 		}
 	}()
 
-	log.Logger = log.Output(zerolog.ConsoleWriter{Out: file})
-	zerolog.SetGlobalLevel(parseLevel(*k9sFlags.LogLevel))
+	if err = setLogger(file); err != nil {
+		log.Error().Err(err).Msg("Fail to set logger")
+	}
 
 	cfg, err := loadConfiguration()
 	if err != nil {
@@ -157,6 +159,17 @@ func loadConfiguration() (*config.Config, error) {
 	}
 
 	return k9sCfg, errs
+}
+
+func setLogger(file *os.File) error {
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: file})
+	zerolog.SetGlobalLevel(parseLevel(*k9sFlags.LogLevel))
+
+	if err := flag.Set("log_dir", config.AppLogsDir); err != nil {
+		return errors.Join(err, fmt.Errorf("fail to set 'log_dir' flag for klog"))
+	}
+
+	return nil
 }
 
 func parseLevel(level string) zerolog.Level {
